@@ -38,3 +38,68 @@ export interface DigitStats {
   totalTicks: number;
 }
 
+/** The 8 tracked digits (excludes 4 and 5) */
+export const TRACKED_DIGITS = [0, 1, 2, 3, 6, 7, 8, 9] as const;
+export type TrackedDigit = (typeof TRACKED_DIGITS)[number];
+
+export const LOW_DIGITS = [0, 1, 2, 3] as const;
+export const HIGH_DIGITS = [6, 7, 8, 9] as const;
+
+export type MovementStatus = 'increase' | 'decrease' | 'no-change';
+
+export type AnalyzerState = 'collecting' | 'baseline' | 'active';
+export type ConnectionState = 'connected' | 'connecting' | 'reconnecting' | 'offline';
+
+/** Frozen group totals for low or high digits. */
+export interface GroupSnapshot {
+  groupCount: number;
+  groupPercentage: number;
+}
+
+/** Frozen analyzer sample at a point in time. */
+export interface DigitSnapshot {
+  /** Counts and percentages for digits 0–9. */
+  counts: readonly number[];
+  percentages: readonly number[];
+  totalTicks: number;
+  lowGroup: GroupSnapshot;
+  highGroup: GroupSnapshot;
+  timestamp: number;
+}
+
+/** Per-digit values frozen at the most recent completed comparison. */
+export interface DigitMovement {
+  digit: TrackedDigit;
+  currentCount: number;
+  currentPercentage: number;
+  deltaCount: number;
+  deltaPercentagePoints: number;
+  status: MovementStatus;
+}
+
+/** Detailed consensus result for a tracked group. */
+export interface ConsensusResult {
+  label: string;
+  increasing: TrackedDigit[];
+  decreasing: TrackedDigit[];
+  noChange: TrackedDigit[];
+}
+
+/** Group-level values frozen at the most recent completed comparison. */
+export interface GroupMovement {
+  digits: readonly TrackedDigit[];
+  currentCount: number;
+  currentPercentage: number;
+  deltaCount: number;
+  deltaPercentagePoints: number;
+  status: MovementStatus;
+  consensus: ConsensusResult;
+}
+
+/** Ranking card data; digits contains every tied member. */
+export interface RankGroup {
+  label: string;
+  digits: TrackedDigit[];
+  count: number;
+  percentage: number;
+}

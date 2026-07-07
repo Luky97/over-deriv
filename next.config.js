@@ -3,9 +3,7 @@ const nextConfig = {
   output: 'export',
   trailingSlash: true,
   basePath: '/over-deriv',
-  images: {
-    unoptimized: true,
-  },
+  images: { unoptimized: true },
   transpilePackages: ['@deriv/core'],
 }
 

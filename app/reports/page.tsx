@@ -3,7 +3,10 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDigitsTrading } from '../../hooks/use-digits-trading';
-import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
+import {
+  DerivWSProvider,
+  useDerivWSContext,
+} from '@/components/custom/deriv-ws-provider';
 import { useLogoSrc } from '@/components/custom/logo-src-provider';
 import { Header } from '@/components/custom/header';
 import { ThemeToggle } from '@/components/custom/theme-toggle';
@@ -20,7 +23,7 @@ const DIGIT_CONTRACT_LABELS: Record<string, string> = {
   DIGITODD: 'Digit Odd',
 };
 
-export default function ReportsPage() {
+function ReportsContent() {
   const logoSrc = useLogoSrc();
   const router = useRouter();
   const { ws, isConnected, isExhausted, auth } = useDerivWSContext();
@@ -80,5 +83,13 @@ export default function ReportsPage() {
         <Footer />
       </div>
     </main>
+  );
+}
+
+export default function ReportsPage() {
+  return (
+    <DerivWSProvider>
+      <ReportsContent />
+    </DerivWSProvider>
   );
 }

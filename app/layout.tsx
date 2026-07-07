@@ -11,8 +11,8 @@ import './custom.css';
 export function generateMetadata(): Metadata {
   const faviconUri = buildFaviconUri();
   return {
-    title: process.env.NEXT_PUBLIC_DERIV_APP_NAME || 'Deriv Digits Trading App',
-    description: 'A white-label trading application powered by Deriv',
+    title: process.env.NEXT_PUBLIC_DERIV_APP_NAME || 'Deriv Digit Movement Analyzer',
+    description: 'Public live-tick digit movement analysis for Deriv markets',
     ...(faviconUri ? { icons: { icon: faviconUri } } : {}),
   };
 }
@@ -24,9 +24,9 @@ const fontClass =
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const logoSrc = getLogoSrc();
   return (
-    <html lang="en" className="h-full lg:h-auto" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${fontClass} bg-background flex min-h-dvh flex-col overflow-hidden max-lg:h-dvh max-lg:overflow-hidden lg:block lg:h-auto lg:min-h-screen lg:overflow-x-hidden lg:overflow-y-auto`}
+        className={`${fontClass} min-h-dvh overflow-x-hidden bg-background text-foreground`}
       >
         <TemplateLayout>
           <LogoSrcProvider logoSrc={logoSrc}>{children}</LogoSrcProvider>

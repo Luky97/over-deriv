@@ -1,55 +1,71 @@
 'use client';
 
-import { useDigitsTrading } from '../hooks/use-digits-trading';
-import { useDerivWSContext } from '@/components/custom/deriv-ws-provider';
-import { useLogoSrc } from '@/components/custom/logo-src-provider';
-import { DigitsView } from '../components/digits-view';
+import { useMemo, useRef } from 'react';
+import { useDerivWS } from '@deriv/core';
+import { AnalyzerDashboard } from '@/components/analyzer-dashboard';
+import { useAnalyzerMarketData } from '@/hooks/use-analyzer-market-data';
+import { useFiveMinuteDigitAnalysis } from '@/hooks/use-five-minute-digit-analysis';
+import { getLastDigit } from '@/lib/digit-stats';
+import type { ConnectionState } from '@/lib/types';
 
-export default function DigitsPage() {
-  const logoSrc = useLogoSrc();
-  const { ws, isConnected, isExhausted, auth } = useDerivWSContext();
-  const { authState, accounts, activeAccount, login, signUp, logout, switchAccount } = auth;
+export default function AnalyzerPage() {
+  // No URL means the core hook opens Deriv's public WebSocket endpoint only.
+  const {
+    ws,
+    isConnected,
+    isExhausted,
+    error: connectionError,
+  } = useDerivWS();
+  const market = useAnalyzerMarketData(ws, isConnected);
+  const hasConnectedRef = useRef(false);
+  if (isConnected) hasConnectedRef.current = true;
 
-  const trading = useDigitsTrading({ ws, isConnected, isExhausted, isAuthenticated: !!auth.wsUrl, onAuthWSFailed: logout });
+  const connectionState: ConnectionState = isConnected
+    ? 'connected'
+    : isExhausted
+      ? 'offline'
+      : hasConnectedRef.current || connectionError
+        ? 'reconnecting'
+        : 'connecting';
+
+  const lastDigit = useMemo(() => {
+    const latestPrice = market.currentTick?.quote ?? market.prices[market.prices.length - 1];
+    return latestPrice === undefined
+      ? null
+      : getLastDigit(latestPrice, market.pipSize);
+  }, [market.currentTick, market.pipSize, market.prices]);
+
+  const analysis = useFiveMinuteDigitAnalysis({
+    prices: market.prices,
+    pipSize: market.pipSize,
+    sessionKey: market.sessionKey,
+  });
 
   return (
-    <DigitsView
-      authState={authState}
-      accounts={accounts}
-      activeAccount={activeAccount}
-      onLogin={login}
-      onSignUp={signUp}
-      onLogout={logout}
-      onSwitchAccount={switchAccount}
-      logoSrc={logoSrc}
-      isConnected={trading.isConnected}
-      isLoading={trading.isLoading}
-      error={trading.error}
-      symbols={trading.symbols}
-      activeSymbol={trading.activeSymbol}
-      selectSymbol={trading.selectSymbol}
-      currentTick={trading.currentTick}
-      lastDigit={trading.lastDigit}
-      digitStats={trading.digitStats}
-      pipSize={trading.pipSize}
-      tradeType={trading.tradeType}
-      setTradeType={trading.setTradeType}
-      contractMode={trading.contractMode}
-      setContractMode={trading.setContractMode}
-      selectedDigit={trading.selectedDigit}
-      setSelectedDigit={trading.setSelectedDigit}
-      stake={trading.stake}
-      setStake={trading.setStake}
-      duration={trading.duration}
-      setDuration={trading.setDuration}
-      durationLimits={trading.durationLimits}
-      proposal={trading.proposal}
-      isProposalLoading={trading.isProposalLoading}
-      buyContract={trading.buyContract}
-      isBuying={trading.isBuying}
-      buyResult={trading.buyResult}
-      buyError={trading.buyError}
-      clearBuyResult={trading.clearBuyResult}
+    <AnalyzerDashboard
+      connectionState={connectionState}
+      isLoading={market.isLoading}
+      error={market.error ?? (isExhausted ? connectionError : null)}
+      symbols={market.symbols}
+      activeSymbol={market.activeSymbol}
+      selectSymbol={market.selectSymbol}
+      currentTick={market.currentTick}
+      lastDigit={lastDigit}
+      pipSize={market.pipSize}
+      restartHistory={market.restartHistory}
+      analyzerState={analysis.analyzerState}
+      tickCount={analysis.tickCount}
+      digitCounts={analysis.digitCounts}
+      digitPercentages={analysis.digitPercentages}
+      rankings={analysis.rankings}
+      lowGroup={analysis.lowGroup}
+      highGroup={analysis.highGroup}
+      digitMovements={analysis.digitMovements}
+      lowGroupMovement={analysis.lowGroupMovement}
+      highGroupMovement={analysis.highGroupMovement}
+      countdownSeconds={analysis.countdownSeconds}
+      lastComparisonTime={analysis.lastComparisonTime}
+      baselineTime={analysis.baselineTime}
     />
   );
 }
