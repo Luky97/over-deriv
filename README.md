@@ -1,13 +1,13 @@
-# Deriv Digit Movement Analyzer
+# Deriv Multi-Symbol Digit Analyzer
 
-A public, analysis-only Next.js dashboard for monitoring last-digit movement across a rolling sample of 1,000 Deriv ticks.
+A public, analysis-only Next.js dashboard for monitoring last-digit movement across independent rolling samples of 1,000 Deriv ticks.
 
 The analyzer:
 
 - connects to Deriv's public WebSocket endpoint;
-- keeps a rolling 1,000-tick window for the selected symbol;
-- ranks digits 0, 1, 2, 3, 6, 7, 8, and 9 with correct tie handling;
-- compares individual and grouped movement at fixed five-minute intervals;
+- scans multiple selected symbols with a separate subscription and 1,000-tick window for each;
+- ranks every digit from 0 through 9 with correct tie handling;
+- compares individual and grouped movement at fixed 30-second intervals;
 - never requests proposals, buys, sells, authorization, or contract execution.
 
 ## Local development

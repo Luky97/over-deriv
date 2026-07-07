@@ -1,658 +1,270 @@
 'use client';
 
-import { useMemo } from 'react';
-import {
-  Activity,
-  Clock3,
-  Database,
-  RefreshCw,
-  ShieldCheck,
-  Wifi,
-  WifiOff,
-} from 'lucide-react';
-import { CurrentTickDisplay } from '@/components/current-tick-display';
-import { SymbolSelector } from '@/components/custom/symbol-selector';
+import { useMemo, useRef, useState } from 'react';
+import { Activity, Clock3, Database, RefreshCw, Search, ShieldCheck, Wifi, WifiOff } from 'lucide-react';
 import { ThemeToggle } from '@/components/custom/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 import { TRACKED_DIGITS } from '@/lib/types';
-import type { ActiveSymbol, Tick } from '@deriv/core';
+import type { ActiveSymbol } from '@deriv/core';
 import type {
-  AnalyzerState,
-  ConnectionState,
-  DigitMovement,
-  GroupMovement,
-  GroupSnapshot,
-  MovementStatus,
-  RankGroup,
-  TrackedDigit,
+  ConnectionState, DigitMovement, GroupMovement, GroupSnapshot,
+  MarketAnalyzerState, MarketConnectionState, MarketTickState,
+  MovementStatus, MultiScanState, RankGroup, TrackedDigit,
 } from '@/lib/types';
 
-export interface AnalyzerDashboardProps {
+interface AnalyzerDashboardProps {
   connectionState: ConnectionState;
-  isLoading: boolean;
-  error: string | null;
   symbols: ActiveSymbol[];
-  activeSymbol: ActiveSymbol | null;
-  selectSymbol: (symbol: string) => void;
-  currentTick: Tick | null;
-  lastDigit: number | null;
-  pipSize: number;
-  restartHistory: () => void;
-  analyzerState: AnalyzerState;
-  tickCount: number;
-  digitCounts: number[];
-  digitPercentages: number[];
-  rankings: RankGroup[];
-  lowGroup: GroupSnapshot;
-  highGroup: GroupSnapshot;
-  digitMovements: DigitMovement[] | null;
-  lowGroupMovement: GroupMovement | null;
-  highGroupMovement: GroupMovement | null;
-  countdownSeconds: number;
-  lastComparisonTime: number | null;
-  baselineTime: number | null;
+  selectedSymbols: string[];
+  focusedSymbol: string | null;
+  markets: Record<string, MarketTickState>;
+  analyses: MultiScanState;
+  isLoadingSymbols: boolean;
+  symbolsError: string | null;
+  setSelectedSymbols: (symbols: string[]) => void;
+  toggleSymbol: (symbol: string) => void;
+  focusSymbol: (symbol: string) => void;
+  restartMarket: (symbol: string) => void;
 }
 
-const STATUS_STYLES: Record<MovementStatus, string> = {
-  increase: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  decrease: 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400',
-  'no-change': 'border-border bg-muted/60 text-muted-foreground',
-};
-
-const STATUS_TEXT_STYLES: Record<MovementStatus, string> = {
-  increase: 'text-emerald-600 dark:text-emerald-400',
-  decrease: 'text-rose-600 dark:text-rose-400',
+const STATUS_STYLE: Record<MovementStatus, string> = {
+  increase: 'text-emerald-700 dark:text-emerald-400',
+  decrease: 'text-rose-700 dark:text-rose-400',
   'no-change': 'text-muted-foreground',
 };
+const STATUS_ICON: Record<MovementStatus, string> = { increase: '↑', decrease: '↓', 'no-change': '—' };
 
-const STATUS_ARROWS: Record<MovementStatus, string> = {
-  increase: '↑',
-  decrease: '↓',
-  'no-change': '—',
-};
+const RANK_STYLES = [
+  'border-emerald-500 bg-emerald-500/15 text-emerald-800 dark:text-emerald-300',
+  'border-cyan-500 bg-cyan-500/15 text-cyan-800 dark:text-cyan-300',
+  'border-rose-500 bg-rose-500/15 text-rose-800 dark:text-rose-300',
+  'border-amber-500 bg-amber-500/15 text-amber-800 dark:text-amber-300',
+];
 
-function formatTime(timestamp: number): string {
+function formatTime(timestamp: number | null): string {
+  if (!timestamp) return 'Pending';
   return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   }).format(timestamp);
 }
 
-function formatCountdown(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+function formatCountdown(seconds: number): string {
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-function formatDelta(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value}`;
+function signed(value: number, decimals = 0): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}`;
 }
 
-function formatPercentagePointDelta(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)} pp`;
-}
-
-function movementLabel(status: MovementStatus): string {
-  if (status === 'increase') return 'Increase';
-  if (status === 'decrease') return 'Decrease';
-  return 'No change';
-}
-
-function SectionHeading({
-  eyebrow,
-  title,
-}: {
-  eyebrow: string;
-  title: string;
-}) {
+function ConnectionBadge({ state }: { state: MarketConnectionState }) {
+  const style = state === 'connected'
+    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+    : state === 'offline' || state === 'error'
+      ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400'
+      : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400';
   return (
-    <div className="mb-3 flex items-end justify-between gap-4">
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
-          {eyebrow}
-        </p>
-        <h2 className="mt-1 text-lg font-semibold tracking-tight text-foreground">
-          {title}
-        </h2>
-      </div>
-    </div>
+    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize', style)}>
+      {state === 'connected' ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+      {state}
+    </span>
   );
 }
 
-function ConnectionBadge({ state }: { state: ConnectionState }) {
-  const settings: Record<ConnectionState, { label: string; style: string; pulse: boolean }> = {
-    connected: {
-      label: 'Connected',
-      style: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-      pulse: false,
-    },
-    connecting: {
-      label: 'Connecting',
-      style: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-      pulse: true,
-    },
-    reconnecting: {
-      label: 'Reconnecting',
-      style: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-      pulse: true,
-    },
-    offline: {
-      label: 'Offline',
-      style: 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400',
-      pulse: false,
-    },
+function RankCard({ rank, index }: { rank: RankGroup | undefined; index: number }) {
+  const headings = ['Most Appear', '2nd Most Appear', 'Least Appear', '2nd Least Appear'];
+  return (
+    <Card className={cn('border-2 shadow-sm', RANK_STYLES[index])}>
+      <CardContent className="p-3.5">
+        <p className="text-[10px] font-bold uppercase tracking-wider">{headings[index]}</p>
+        <p className="mt-2 font-mono text-xl font-black">{rank?.digits.length ? rank.digits.join(', ') : '—'}</p>
+        <p className="mt-1 text-xs font-medium">
+          {rank?.digits.length ? `${rank.count} ticks · ${rank.percentage.toFixed(1)}%` : 'Waiting for 1,000 ticks'}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function movementByDigit(movements: DigitMovement[] | null): Map<TrackedDigit, DigitMovement> {
+  return new Map(movements?.map((movement) => [movement.digit, movement]) ?? []);
+}
+
+function rankDetails(digit: TrackedDigit, rankings: RankGroup[]): { labels: string[]; style: string } {
+  const matching = rankings
+    .map((rank, index) => ({ rank, index }))
+    .filter(({ rank }) => rank.digits.includes(digit));
+  return {
+    labels: matching.map(({ rank }) => rank.label),
+    style: matching.length > 0 ? RANK_STYLES[matching[0].index] : 'border-border bg-card text-card-foreground',
   };
-  const setting = settings[state];
-
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${setting.style}`}>
-      {state === 'offline' ? (
-        <WifiOff className="h-3.5 w-3.5" aria-hidden="true" />
-      ) : (
-        <Wifi className={`h-3.5 w-3.5 ${setting.pulse ? 'animate-pulse' : ''}`} aria-hidden="true" />
-      )}
-      {setting.label}
-    </span>
-  );
 }
 
-function RankingCard({ rank, index }: { rank: RankGroup; index: number }) {
-  const accentBars = [
-    'from-violet-500/70 to-violet-500/0',
-    'from-sky-500/70 to-sky-500/0',
-    'from-rose-500/70 to-rose-500/0',
-    'from-amber-500/70 to-amber-500/0',
-  ];
-  const accentText = [
-    'text-violet-600 dark:text-violet-400',
-    'text-sky-600 dark:text-sky-400',
-    'text-rose-600 dark:text-rose-400',
-    'text-amber-600 dark:text-amber-400',
-  ];
-  const hasRank = rank.digits.length > 0;
-
+function DigitTile({ digit, analysis }: { digit: TrackedDigit; analysis: MarketAnalyzerState }) {
+  const movement = movementByDigit(analysis.digitMovements).get(digit);
+  const rank = rankDetails(digit, analysis.rankings);
+  const status = movement?.status ?? 'no-change';
   return (
-    <Card className="overflow-hidden border-border/80 shadow-sm">
-      <div className={`h-1 bg-gradient-to-r ${accentBars[index]}`} />
-      <CardContent className="p-4 sm:p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          {rank.label}
-        </p>
-        {hasRank ? (
-          <>
-            <p className={`mt-3 font-mono text-2xl font-bold tracking-tight ${accentText[index]}`}>
-              {rank.digits.join(', ')}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              <span className="font-mono font-semibold text-foreground">{rank.count}</span> ticks
-              <span className="mx-1.5">·</span>
-              <span className="font-mono font-semibold text-foreground">{rank.percentage.toFixed(1)}%</span>
-            </p>
-          </>
-        ) : (
-          <p className="mt-3 text-2xl font-semibold text-muted-foreground">—</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ConsensusDetails({ movement }: { movement: GroupMovement }) {
-  if (!movement.consensus.label.startsWith('Mixed')) return null;
-
-  return (
-    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-      {movement.consensus.increasing.length > 0 && (
-        <span className="text-emerald-600 dark:text-emerald-400">
-          Increase: {movement.consensus.increasing.join(', ')}
-        </span>
-      )}
-      {movement.consensus.decreasing.length > 0 && (
-        <span className="text-rose-600 dark:text-rose-400">
-          Decrease: {movement.consensus.decreasing.join(', ')}
-        </span>
-      )}
-      {movement.consensus.noChange.length > 0 && (
-        <span className="text-muted-foreground">
-          No change: {movement.consensus.noChange.join(', ')}
-        </span>
-      )}
+    <div className={cn('min-w-0 rounded-xl border-2 p-3 shadow-sm', rank.style)}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-mono text-2xl font-black">{digit}</span>
+        <div className="flex max-w-[75%] flex-wrap justify-end gap-1">
+          {rank.labels.map((label) => <span key={label} className="rounded bg-background/70 px-1.5 py-0.5 text-[9px] font-bold uppercase">{label}</span>)}
+        </div>
+      </div>
+      <p className="mt-2 font-mono text-sm font-bold">{analysis.digitCounts[digit] ?? 0} ticks</p>
+      <p className="font-mono text-xs opacity-80">{(analysis.digitPercentages[digit] ?? 0).toFixed(1)}%</p>
+      <div className={cn('mt-2 border-t border-current/15 pt-2 text-xs font-semibold', STATUS_STYLE[status])}>
+        <p className="font-mono">{movement ? `${signed(movement.deltaCount)} / ${signed(movement.deltaPercentagePoints, 1)} pp` : '— / —'}</p>
+        <p className="mt-1">{movement ? `${STATUS_ICON[status]} ${status === 'no-change' ? 'No change' : status === 'increase' ? 'Increase' : 'Decrease'}` : 'Comparison pending'}</p>
+      </div>
     </div>
   );
 }
 
-function GroupCard({
-  name,
-  digits,
-  group,
-  movement,
-}: {
-  name: 'Low' | 'High';
-  digits: string;
-  group: GroupSnapshot;
-  movement: GroupMovement | null;
-}) {
-  const statusText = movement
-    ? movement.status === 'increase'
-      ? `${name} group increased`
-      : movement.status === 'decrease'
-        ? `${name} group decreased`
-        : `No ${name.toLowerCase()} group change`
-    : 'Comparison pending';
-
+function ConsensusLines({ movement }: { movement: GroupMovement }) {
   return (
-    <Card className="border-border/80 shadow-sm">
-      <CardContent className="p-5 sm:p-6">
+    <div className="mt-2 space-y-0.5 text-[11px]">
+      <p className="text-emerald-700 dark:text-emerald-400">Increase: {movement.consensus.increasing.join(', ') || 'None'}</p>
+      <p className="text-rose-700 dark:text-rose-400">Decrease: {movement.consensus.decreasing.join(', ') || 'None'}</p>
+      <p className="text-muted-foreground">No change: {movement.consensus.noChange.join(', ') || 'None'}</p>
+    </div>
+  );
+}
+
+function GroupCard({ title, digits, snapshot, movement }: {
+  title: string; digits: string; snapshot: GroupSnapshot; movement: GroupMovement | null;
+}) {
+  const status = movement?.status ?? 'no-change';
+  return (
+    <Card>
+      <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              {name.toUpperCase()} DIGITS
-            </p>
-            <p className="mt-1 font-mono text-sm font-semibold text-foreground">{digits}</p>
-          </div>
-          <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${movement ? STATUS_STYLES[movement.status] : STATUS_STYLES['no-change']}`}>
-            {movement ? STATUS_ARROWS[movement.status] : '•'} {statusText}
-          </span>
+          <div><p className="text-xs font-bold tracking-wide">{title}</p><p className="mt-1 font-mono text-xs text-muted-foreground">{digits}</p></div>
+          <span className={cn('text-xs font-bold', STATUS_STYLE[status])}>{movement ? `${STATUS_ICON[status]} ${status.replace('-', ' ')}` : 'Pending'}</span>
         </div>
-
-        <div className="mt-6 grid grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Current</p>
-            <p className="mt-1 font-mono text-xl font-bold text-foreground sm:text-2xl">
-              {group.groupCount} <span className="text-sm font-medium text-muted-foreground">ticks</span>
-            </p>
-            <p className="mt-1 font-mono text-sm text-muted-foreground">
-              {group.groupPercentage.toFixed(1)}%
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">5-minute change</p>
-            {movement ? (
-              <>
-                <p className={`mt-1 font-mono text-xl font-bold sm:text-2xl ${STATUS_TEXT_STYLES[movement.status]}`}>
-                  {formatDelta(movement.deltaCount)}
-                </p>
-                <p className={`mt-1 font-mono text-sm ${STATUS_TEXT_STYLES[movement.status]}`}>
-                  {formatPercentagePointDelta(movement.deltaPercentagePoints)}
-                </p>
-              </>
-            ) : (
-              <p className="mt-1 text-xl font-semibold text-muted-foreground">—</p>
-            )}
-          </div>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div><p className="text-[10px] uppercase text-muted-foreground">Current</p><p className="mt-1 font-mono text-lg font-bold">{snapshot.groupCount}</p><p className="font-mono text-xs text-muted-foreground">{snapshot.groupPercentage.toFixed(1)}%</p></div>
+          <div><p className="text-[10px] uppercase text-muted-foreground">30-second change</p><p className={cn('mt-1 font-mono text-lg font-bold', STATUS_STYLE[status])}>{movement ? signed(movement.deltaCount) : '—'}</p><p className={cn('font-mono text-xs', STATUS_STYLE[status])}>{movement ? `${signed(movement.deltaPercentagePoints, 1)} pp` : '—'}</p></div>
         </div>
-
-        <div className="mt-5 border-t border-border/70 pt-4">
-          <p className="text-xs font-medium text-muted-foreground">Group consensus</p>
-          <p className="mt-1 text-sm font-semibold text-foreground">
-            {movement?.consensus.label ?? 'First 5-minute comparison is pending'}
-          </p>
-          {movement && <ConsensusDetails movement={movement} />}
+        <div className="mt-3 border-t pt-3">
+          <p className="text-xs font-semibold">{movement?.consensus.label ?? 'First 30-second comparison is pending'}</p>
+          {movement && <ConsensusLines movement={movement} />}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function MovementStatusBadge({ movement }: { movement: DigitMovement | null }) {
-  if (!movement) {
-    return (
-      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES['no-change']}`}>
-        Pending
-      </span>
-    );
-  }
+function comparisonStatus(analysis: MarketAnalyzerState): string {
+  if (analysis.analyzerState === 'collecting') return 'Collecting sample';
+  if (analysis.analyzerState === 'baseline') return 'Baseline · comparison pending';
+  const movements = analysis.digitMovements ?? [];
+  const up = movements.filter((item) => item.status === 'increase').length;
+  const down = movements.filter((item) => item.status === 'decrease').length;
+  return `${up} increased · ${down} decreased`;
+}
 
+function OverviewCard({ market, analysis, active, onClick }: {
+  market: MarketTickState; analysis: MarketAnalyzerState; active: boolean; onClick: () => void;
+}) {
+  const rank = (index: number) => analysis.rankings[index]?.digits.join(', ') || '—';
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[movement.status]}`}>
-      {STATUS_ARROWS[movement.status]} {movementLabel(movement.status)}
-    </span>
+    <button type="button" onClick={onClick} className={cn('w-full rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-primary/60 hover:shadow-md', active && 'border-primary ring-2 ring-primary/15')}>
+      <div className="flex items-start justify-between gap-2">
+        <div><p className="font-semibold">{market.symbol.underlying_symbol_name}</p><p className="font-mono text-[11px] text-muted-foreground">{market.symbol.underlying_symbol}</p></div>
+        <ConnectionBadge state={market.connectionState} />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 border-y py-3 text-xs">
+        <div><p className="text-muted-foreground">Quote</p><p className="mt-1 font-mono font-bold">{market.currentQuote === null ? '—' : market.currentQuote.toFixed(market.pipSize)}</p></div>
+        <div><p className="text-muted-foreground">Last digit</p><p className="mt-1 font-mono font-bold text-primary">{market.lastDigit ?? '—'}</p></div>
+        <div><p className="text-muted-foreground">Sample</p><p className="mt-1 font-mono font-bold">{analysis.tickCount} / 1,000</p></div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+        <p>Most: <b>{rank(0)}</b></p><p>2nd Most: <b>{rank(1)}</b></p>
+        <p>Least: <b>{rank(2)}</b></p><p>2nd Least: <b>{rank(3)}</b></p>
+      </div>
+      <p className="mt-3 text-[11px] font-medium text-muted-foreground">{comparisonStatus(analysis)}</p>
+      <p className="mt-1 text-[11px] text-muted-foreground">Last comparison: {analysis.lastComparisonTime ? `${formatTime(analysis.lastComparisonTime)} Local time` : 'Pending'}</p>
+    </button>
   );
 }
 
-interface DigitRowProps {
-  digit: TrackedDigit;
-  count: number;
-  percentage: number;
-  movement: DigitMovement | null;
-}
-
-function MobileDigitRow({ digit, count, percentage, movement }: DigitRowProps) {
+function MovementTable({ analysis }: { analysis: MarketAnalyzerState }) {
+  const movements = movementByDigit(analysis.digitMovements);
   return (
-    <div className="rounded-xl border border-border/70 bg-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 font-mono text-base font-bold text-primary">
-            {digit}
-          </span>
-          <div>
-            <p className="text-xs text-muted-foreground">Current sample</p>
-            <p className="font-mono text-sm font-semibold">
-              {count} ticks · {percentage.toFixed(1)}%
-            </p>
-          </div>
-        </div>
-        <MovementStatusBadge movement={movement} />
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border/60 pt-3 text-sm">
-        <div>
-          <p className="text-xs text-muted-foreground">5-min count</p>
-          <p className={`mt-1 font-mono font-semibold ${movement ? STATUS_TEXT_STYLES[movement.status] : 'text-muted-foreground'}`}>
-            {movement ? formatDelta(movement.deltaCount) : '—'}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">5-min percentage</p>
-          <p className={`mt-1 font-mono font-semibold ${movement ? STATUS_TEXT_STYLES[movement.status] : 'text-muted-foreground'}`}>
-            {movement ? formatPercentagePointDelta(movement.deltaPercentagePoints) : '—'}
-          </p>
-        </div>
-      </div>
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[620px] text-left text-sm">
+        <thead className="bg-muted/70 text-[10px] uppercase tracking-wider text-muted-foreground"><tr><th className="p-3">Digit</th><th className="p-3">Current</th><th className="p-3">Percentage</th><th className="p-3">30-sec count</th><th className="p-3">30-sec percentage</th><th className="p-3">Movement</th></tr></thead>
+        <tbody>{TRACKED_DIGITS.map((digit) => {
+          const movement = movements.get(digit); const status = movement?.status ?? 'no-change';
+          return <tr key={digit} className="border-t"><td className="p-3 font-mono font-bold">{digit}</td><td className="p-3 font-mono">{analysis.digitCounts[digit]}</td><td className="p-3 font-mono">{analysis.digitPercentages[digit].toFixed(1)}%</td><td className={cn('p-3 font-mono', STATUS_STYLE[status])}>{movement ? signed(movement.deltaCount) : '—'}</td><td className={cn('p-3 font-mono', STATUS_STYLE[status])}>{movement ? `${signed(movement.deltaPercentagePoints, 1)} pp` : '—'}</td><td className={cn('p-3 font-semibold capitalize', STATUS_STYLE[status])}>{movement ? `${STATUS_ICON[status]} ${status.replace('-', ' ')}` : 'Pending'}</td></tr>;
+        })}</tbody>
+      </table>
     </div>
   );
 }
 
-function DigitMovementTable({
-  counts,
-  percentages,
-  movements,
-}: {
-  counts: number[];
-  percentages: number[];
-  movements: DigitMovement[] | null;
-}) {
-  const movementByDigit = useMemo(
-    () => new Map(movements?.map((movement) => [movement.digit, movement]) ?? []),
-    [movements]
-  );
+export function AnalyzerDashboard(props: AnalyzerDashboardProps) {
+  const [search, setSearch] = useState('');
+  const detailRef = useRef<HTMLElement>(null);
+  const visibleSymbols = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return [...props.symbols]
+      .filter((symbol) => !query || symbol.underlying_symbol.toLowerCase().includes(query) || symbol.underlying_symbol_name.toLowerCase().includes(query))
+      .sort((a, b) => a.underlying_symbol_name.localeCompare(b.underlying_symbol_name));
+  }, [props.symbols, search]);
+  const focusedMarket = props.focusedSymbol ? props.markets[props.focusedSymbol] : undefined;
+  const focusedAnalysis = props.focusedSymbol ? props.analyses[props.focusedSymbol] : undefined;
+  const openMarket = (symbol: string) => {
+    props.focusSymbol(symbol);
+    window.setTimeout(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
 
   return (
-    <>
-      <div className="space-y-3 md:hidden">
-        {TRACKED_DIGITS.map((digit) => (
-          <MobileDigitRow
-            key={digit}
-            digit={digit}
-            count={counts[digit] ?? 0}
-            percentage={percentages[digit] ?? 0}
-            movement={movementByDigit.get(digit) ?? null}
-          />
-        ))}
-      </div>
-
-      <div className="hidden overflow-hidden rounded-xl border border-border/70 md:block">
-        <table className="w-full border-collapse text-sm">
-          <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 text-left font-semibold">Digit</th>
-              <th className="px-4 py-3 text-right font-semibold">Count</th>
-              <th className="px-4 py-3 text-right font-semibold">Current %</th>
-              <th className="px-4 py-3 text-right font-semibold">5-min count</th>
-              <th className="px-4 py-3 text-right font-semibold">5-min pp</th>
-              <th className="px-4 py-3 text-center font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/60 bg-card">
-            {TRACKED_DIGITS.map((digit) => {
-              const movement = movementByDigit.get(digit) ?? null;
-              return (
-                <tr key={digit} className="transition-colors hover:bg-muted/30">
-                  <td className="px-4 py-3.5">
-                    <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10 font-mono font-bold text-primary">
-                      {digit}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3.5 text-right font-mono font-semibold">
-                    {counts[digit] ?? 0}
-                  </td>
-                  <td className="px-4 py-3.5 text-right font-mono">
-                    {(percentages[digit] ?? 0).toFixed(1)}%
-                  </td>
-                  <td className={`px-4 py-3.5 text-right font-mono font-semibold ${movement ? STATUS_TEXT_STYLES[movement.status] : 'text-muted-foreground'}`}>
-                    {movement ? formatDelta(movement.deltaCount) : '—'}
-                  </td>
-                  <td className={`px-4 py-3.5 text-right font-mono ${movement ? STATUS_TEXT_STYLES[movement.status] : 'text-muted-foreground'}`}>
-                    {movement ? formatPercentagePointDelta(movement.deltaPercentagePoints) : '—'}
-                  </td>
-                  <td className="px-4 py-3.5 text-center">
-                    <MovementStatusBadge movement={movement} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-export function AnalyzerDashboard({
-  connectionState,
-  isLoading,
-  error,
-  symbols,
-  activeSymbol,
-  selectSymbol,
-  currentTick,
-  lastDigit,
-  pipSize,
-  restartHistory,
-  analyzerState,
-  tickCount,
-  digitCounts,
-  digitPercentages,
-  rankings,
-  lowGroup,
-  highGroup,
-  digitMovements,
-  lowGroupMovement,
-  highGroupMovement,
-  countdownSeconds,
-  lastComparisonTime,
-  baselineTime,
-}: AnalyzerDashboardProps) {
-  const isFullSample = tickCount === 1_000;
-
-  return (
-    <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,rgb(var(--primary)/0.08),transparent_28rem)]">
-      <header className="sticky top-0 z-50 border-b border-border/80 bg-background/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm shadow-primary/20">
-              <Activity className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-sm font-bold tracking-tight sm:text-lg">
-                Deriv Digit Movement Analyzer
-              </h1>
-              <p className="hidden text-xs text-muted-foreground sm:block">
-                Public live ticks · Rolling 1,000-tick sample
-              </p>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <ConnectionBadge state={connectionState} />
-            <ThemeToggle />
-          </div>
+    <div className="min-h-dvh bg-muted/25">
+      <header className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Activity className="h-5 w-5" /></div><div><h1 className="text-sm font-bold sm:text-base">Deriv Multi-Symbol Digit Analyzer</h1><p className="text-[10px] text-muted-foreground">Live statistical monitor · analysis only</p></div></div>
+          <div className="flex items-center gap-2"><ConnectionBadge state={props.connectionState} /><ThemeToggle /></div>
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-7xl space-y-7 px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
-        {error && (
-          <div className="flex flex-col gap-3 rounded-xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300 sm:flex-row sm:items-center sm:justify-between">
-            <span>{error}</span>
-            <Button variant="outline" size="sm" onClick={restartHistory} className="shrink-0 bg-background/70">
-              <RefreshCw className="mr-2 h-3.5 w-3.5" /> Retry sample
-            </Button>
-          </div>
-        )}
+      <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
+        <Card>
+          <CardContent className="p-4 sm:p-5">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="font-semibold">Markets</h2><p className="text-xs text-muted-foreground">{props.selectedSymbols.length} active scanned market{props.selectedSymbols.length === 1 ? '' : 's'}</p></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => props.setSelectedSymbols([...new Set([...props.selectedSymbols, ...visibleSymbols.map((item) => item.underlying_symbol)])])}>Select all visible markets</Button><Button size="sm" variant="outline" onClick={() => props.setSelectedSymbols([])}>Clear all</Button></div></div>
+            <div className="relative mt-4"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search markets" className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/30" /></div>
+            <div className="mt-3 max-h-52 overflow-y-auto rounded-lg border p-2">
+              {props.isLoadingSymbols ? <p className="p-2 text-sm text-muted-foreground">Loading available markets…</p> : visibleSymbols.map((symbol) => <label key={symbol.underlying_symbol} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"><input type="checkbox" checked={props.selectedSymbols.includes(symbol.underlying_symbol)} onChange={() => props.toggleSymbol(symbol.underlying_symbol)} className="h-4 w-4 accent-primary" /><span className="min-w-0 flex-1 truncate">{symbol.underlying_symbol_name}</span><span className="font-mono text-[10px] text-muted-foreground">{symbol.underlying_symbol}</span></label>)}
+            </div>
+            {props.symbolsError && <p className="mt-3 text-sm text-rose-600">{props.symbolsError}</p>}
+          </CardContent>
+        </Card>
 
-        <section aria-labelledby="live-market-heading">
-          <SectionHeading eyebrow="Live market" title="Quote and sample" />
-          <Card className="overflow-hidden border-border/80 shadow-sm">
-            <CardContent className="p-0">
-              <div className="grid lg:grid-cols-[1.2fr_0.8fr]">
-                <div className="p-5 sm:p-6 lg:border-r lg:border-border/70">
-                  <div className="flex items-center justify-between gap-3">
-                    <label id="live-market-heading" className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">
-                      Selected market / symbol
-                    </label>
-                    <Button variant="ghost" size="sm" onClick={restartHistory} disabled={!activeSymbol}>
-                      <RefreshCw className="mr-2 h-3.5 w-3.5" /> Restart sample
-                    </Button>
-                  </div>
-                  <div className="mt-3">
-                    <SymbolSelector
-                      symbols={symbols}
-                      activeSymbol={activeSymbol}
-                      onSymbolChange={selectSymbol}
-                    />
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="rounded-full border border-border bg-muted/50 px-2.5 py-1 font-mono font-semibold text-foreground">
-                      {activeSymbol?.underlying_symbol ?? '—'}
-                    </span>
-                    <span className={`rounded-full border px-2.5 py-1 font-semibold ${isFullSample ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
-                      {isFullSample
-                        ? '1,000 / 1,000 ticks'
-                        : `Collecting ticks: ${tickCount.toLocaleString()} / 1,000`}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex min-h-44 items-center justify-center bg-muted/20 p-5 sm:p-6">
-                  {isLoading && !currentTick && tickCount === 0 ? (
-                    <div className="text-center">
-                      <RefreshCw className="mx-auto h-6 w-6 animate-spin text-primary" />
-                      <p className="mt-3 text-sm text-muted-foreground">Loading public tick history…</p>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">
-                        Current live quote
-                      </p>
-                      <CurrentTickDisplay
-                        tick={currentTick}
-                        lastDigit={lastDigit}
-                        activeSymbol={activeSymbol}
-                        pipSize={pipSize}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <section><div className="mb-3"><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Live scanner</p><h2 className="mt-1 text-lg font-bold">Multi-Scan Overview</h2></div>
+          {props.selectedSymbols.length === 0 ? <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">Select one or more markets to start scanning.</CardContent></Card> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{props.selectedSymbols.map((symbol) => {
+            const market = props.markets[symbol]; const analysis = props.analyses[symbol];
+            return market && analysis ? <OverviewCard key={symbol} market={market} analysis={analysis} active={symbol === props.focusedSymbol} onClick={() => openMarket(symbol)} /> : null;
+          })}</div>}
         </section>
 
-        {!isFullSample ? (
-          <Card className="border-dashed border-amber-500/35 bg-amber-500/[0.04] shadow-none">
-            <CardContent className="flex flex-col items-center px-5 py-10 text-center">
-              <Database className="h-7 w-7 text-amber-500" aria-hidden="true" />
-              <p className="mt-3 font-semibold text-foreground">
-                Collecting ticks: {tickCount.toLocaleString()} / 1,000
-              </p>
-              <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                Rankings and movement comparisons stay hidden until the full sample is ready.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            <section aria-labelledby="rankings-heading">
-              <SectionHeading eyebrow="Distribution" title="Tracked digit rankings" />
-              <div id="rankings-heading" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                {rankings.map((rank, index) => (
-                  <RankingCard key={rank.label} rank={rank} index={index} />
-                ))}
-              </div>
-            </section>
+        {focusedMarket && focusedAnalysis && <section ref={detailRef} className="scroll-mt-20 space-y-5">
+          <Card><CardContent className="p-4 sm:p-5"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><div className="flex items-center gap-2"><h2 className="text-xl font-bold">{focusedMarket.symbol.underlying_symbol_name}</h2><ConnectionBadge state={focusedMarket.connectionState} /></div><p className="mt-1 font-mono text-xs text-muted-foreground">{focusedMarket.symbol.underlying_symbol}</p></div><Button size="sm" variant="outline" onClick={() => props.restartMarket(focusedMarket.symbol.underlying_symbol)}><RefreshCw className="mr-2 h-3.5 w-3.5" />Restart history</Button></div>
+            {focusedMarket.error && <p className="mt-3 text-sm text-rose-600">{focusedMarket.error}</p>}
+            <div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-muted/60 p-3"><p className="text-[10px] uppercase text-muted-foreground">Live quote</p><p className="mt-1 font-mono text-xl font-bold">{focusedMarket.currentQuote === null ? '—' : focusedMarket.currentQuote.toFixed(focusedMarket.pipSize)}</p></div><div className="rounded-lg bg-muted/60 p-3"><p className="text-[10px] uppercase text-muted-foreground">Current last digit</p><p className="mt-1 font-mono text-xl font-black text-primary">{focusedMarket.lastDigit ?? '—'}</p></div><div className="rounded-lg bg-muted/60 p-3"><p className="text-[10px] uppercase text-muted-foreground">Rolling sample</p><p className="mt-1 font-mono text-xl font-bold">{focusedAnalysis.tickCount} / 1,000</p></div></div>
+          </CardContent></Card>
 
-            <section aria-labelledby="groups-heading">
-              <SectionHeading eyebrow="Grouped movement" title="Low and high digits" />
-              <div id="groups-heading" className="grid gap-4 lg:grid-cols-2">
-                <GroupCard
-                  name="Low"
-                  digits="0, 1, 2, 3"
-                  group={lowGroup}
-                  movement={lowGroupMovement}
-                />
-                <GroupCard
-                  name="High"
-                  digits="6, 7, 8, 9"
-                  group={highGroup}
-                  movement={highGroupMovement}
-                />
-              </div>
-            </section>
+          <div className="grid gap-3 rounded-xl border bg-card p-4 text-sm shadow-sm sm:grid-cols-3"><div className="flex items-center gap-2"><Clock3 className="h-4 w-4 text-primary" /><div><p className="text-xs text-muted-foreground">Next comparison</p><p className="font-mono font-bold">{focusedAnalysis.analyzerState === 'collecting' ? 'Waiting for sample' : `in ${formatCountdown(focusedAnalysis.countdownSeconds)}`}</p></div></div><div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /><div><p className="text-xs text-muted-foreground">Monitor status</p><p className="font-semibold">{focusedAnalysis.analyzerState === 'baseline' ? 'Baseline captured. First 30-second comparison is pending.' : comparisonStatus(focusedAnalysis)}</p></div></div><div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><div><p className="text-xs text-muted-foreground">Last comparison</p><p className="font-semibold">{focusedAnalysis.lastComparisonTime ? `${formatTime(focusedAnalysis.lastComparisonTime)} Local time` : 'Pending'}</p></div></div></div>
 
-            <section aria-labelledby="monitor-heading">
-              <SectionHeading eyebrow="Timed snapshot" title="Five-minute monitor" />
-              <Card id="monitor-heading" className="border-border/80 shadow-sm">
-                <CardContent className="grid gap-5 p-5 sm:grid-cols-3 sm:p-6">
-                  <div className="flex gap-3">
-                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground">Monitor status</p>
-                      <p className="mt-1 text-sm font-semibold text-foreground">
-                        {analyzerState === 'baseline'
-                          ? 'Baseline captured. First 5-minute comparison is pending.'
-                          : 'Active — comparisons running'}
-                      </p>
-                      {baselineTime && (
-                        <p className="mt-1 font-mono text-xs text-muted-foreground">
-                          Baseline: {formatTime(baselineTime)} Local time
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex gap-3 sm:border-l sm:border-border/70 sm:pl-5">
-                    <Activity className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground">Last snapshot</p>
-                      <p className="mt-1 font-mono text-sm font-semibold text-foreground">
-                        Last comparison: {lastComparisonTime ? `${formatTime(lastComparisonTime)} Local time` : '—'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3 sm:border-l sm:border-border/70 sm:pl-5">
-                    <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground">Next snapshot</p>
-                      <p className="mt-1 font-mono text-lg font-bold text-primary">
-                        Next comparison in {formatCountdown(countdownSeconds)}
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </section>
-
-            <section aria-labelledby="movement-heading">
-              <SectionHeading eyebrow="Individual movement" title="Tracked digit detail" />
-              <Card id="movement-heading" className="border-border/80 shadow-sm">
-                <CardContent className="p-4 sm:p-5">
-                  <DigitMovementTable
-                    counts={digitCounts}
-                    percentages={digitPercentages}
-                    movements={digitMovements}
-                  />
-                </CardContent>
-              </Card>
-            </section>
-          </>
-        )}
-      </div>
-
-      <footer className="mt-4 border-t border-border/80 bg-background/85 px-4 py-5 text-center backdrop-blur">
-        <p className="text-xs text-muted-foreground">
-          Statistical monitor only. This is not a prediction or automatic trading signal.
-        </p>
-      </footer>
-    </main>
+          <div><h3 className="mb-3 font-bold">Ranking summary</h3><div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[0, 1, 2, 3].map((index) => <RankCard key={index} rank={focusedAnalysis.rankings[index]} index={index} />)}</div></div>
+          <div><h3 className="mb-3 font-bold">Low & high group analysis</h3><div className="grid gap-3 md:grid-cols-2"><GroupCard title="LOW DIGITS" digits="0, 1, 2, 3" snapshot={focusedAnalysis.lowGroup} movement={focusedAnalysis.lowGroupMovement} /><GroupCard title="HIGH DIGITS" digits="6, 7, 8, 9" snapshot={focusedAnalysis.highGroup} movement={focusedAnalysis.highGroupMovement} /></div></div>
+          <div><div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-end"><div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Digits 0–9</p><h3 className="mt-1 text-lg font-bold">Live Digit Distribution</h3></div><div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-semibold"><span className="text-emerald-600">● Green = Most</span><span className="text-cyan-600">● Blue = 2nd Most</span><span className="text-rose-600">● Red = Least</span><span className="text-amber-600">● Amber = 2nd Least</span><span className="text-muted-foreground">● Neutral = Other digits</span></div></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">{TRACKED_DIGITS.map((digit) => <DigitTile key={digit} digit={digit} analysis={focusedAnalysis} />)}</div></div>
+          <div><h3 className="mb-3 font-bold">Full 30-second movement table</h3><MovementTable analysis={focusedAnalysis} /></div>
+        </section>}
+      </main>
+      <footer className="mt-8 border-t bg-background px-4 py-5 text-center text-xs text-muted-foreground">Statistical monitor only. This is not a prediction or automatic trading signal.</footer>
+    </div>
   );
 }

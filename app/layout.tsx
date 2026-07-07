@@ -11,8 +11,8 @@ import './custom.css';
 export function generateMetadata(): Metadata {
   const faviconUri = buildFaviconUri();
   return {
-    title: process.env.NEXT_PUBLIC_DERIV_APP_NAME || 'Deriv Digit Movement Analyzer',
-    description: 'Public live-tick digit movement analysis for Deriv markets',
+    title: process.env.NEXT_PUBLIC_DERIV_APP_NAME || 'Deriv Multi-Symbol Digit Analyzer',
+    description: 'Public multi-market live-tick digit movement analysis for Deriv markets',
     ...(faviconUri ? { icons: { icon: faviconUri } } : {}),
   };
 }

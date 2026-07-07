@@ -1,3 +1,5 @@
+import type { ActiveSymbol, Tick } from '@deriv/core';
+
 // Re-export shared trading types from @deriv/core
 export type {
   ActiveSymbol,
@@ -38,8 +40,8 @@ export interface DigitStats {
   totalTicks: number;
 }
 
-/** The 8 tracked digits (excludes 4 and 5) */
-export const TRACKED_DIGITS = [0, 1, 2, 3, 6, 7, 8, 9] as const;
+/** Every displayed last digit. */
+export const TRACKED_DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 export type TrackedDigit = (typeof TRACKED_DIGITS)[number];
 
 export const LOW_DIGITS = [0, 1, 2, 3] as const;
@@ -49,6 +51,7 @@ export type MovementStatus = 'increase' | 'decrease' | 'no-change';
 
 export type AnalyzerState = 'collecting' | 'baseline' | 'active';
 export type ConnectionState = 'connected' | 'connecting' | 'reconnecting' | 'offline';
+export type MarketConnectionState = ConnectionState | 'error';
 
 /** Frozen group totals for low or high digits. */
 export interface GroupSnapshot {
@@ -103,3 +106,36 @@ export interface RankGroup {
   count: number;
   percentage: number;
 }
+
+/** A symbol's isolated rolling tick stream. */
+export interface MarketTickState {
+  symbol: ActiveSymbol;
+  connectionState: MarketConnectionState;
+  prices: number[];
+  currentTick: Tick | null;
+  currentQuote: number | null;
+  lastDigit: number | null;
+  pipSize: number;
+  sessionKey: string;
+  isLoading: boolean;
+  error: string | null;
+}
+
+/** Current and frozen interval analysis for one market. */
+export interface MarketAnalyzerState {
+  analyzerState: AnalyzerState;
+  tickCount: number;
+  digitCounts: number[];
+  digitPercentages: number[];
+  rankings: RankGroup[];
+  lowGroup: GroupSnapshot;
+  highGroup: GroupSnapshot;
+  digitMovements: DigitMovement[] | null;
+  lowGroupMovement: GroupMovement | null;
+  highGroupMovement: GroupMovement | null;
+  countdownSeconds: number;
+  lastComparisonTime: number | null;
+  baselineTime: number | null;
+}
+
+export type MultiScanState = Record<string, MarketAnalyzerState>;

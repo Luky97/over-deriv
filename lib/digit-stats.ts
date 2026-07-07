@@ -64,7 +64,7 @@ export function updateDigitStats(
   return [...prices, newPrice].slice(-windowSize);
 }
 
-/** Build the four tracked-digit rankings with mathematically correct ties. */
+/** Build the four all-digit rankings with mathematically correct ties. */
 export function computeRankings(
   counts: readonly number[],
   totalTicks: number
