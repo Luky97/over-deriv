@@ -26,11 +26,11 @@ export class DerivWS {
   private maxReconnectAttempts = 5;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private url: string;
+  private readonly url: string;
   private isConnecting = false;
 
-  constructor(url?: string) {
-    this.url = url ?? getPublicWsUrl();
+  constructor() {
+    this.url = getPublicWsUrl();
   }
 
   /**
@@ -56,14 +56,6 @@ export class DerivWS {
     for (const handler of this.connectionStateHandlers) {
       handler(connected);
     }
-  }
-
-  /**
-   * Update the URL used for future reconnections without disrupting the current connection.
-   * Call this when an OTP URL is refreshed but the live socket is still healthy.
-   */
-  updateUrl(url: string): void {
-    this.url = url;
   }
 
   connect(): Promise<void> {
@@ -95,8 +87,12 @@ export class DerivWS {
       };
 
       this.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        this.handleMessage(data);
+        try {
+          const data = JSON.parse(event.data) as Record<string, unknown>;
+          this.handleMessage(data);
+        } catch {
+          // Ignore malformed upstream frames; they can never settle research contracts.
+        }
       };
 
       this.ws.onerror = () => {
@@ -108,6 +104,8 @@ export class DerivWS {
         this.isConnecting = false;
         this.stopPing();
         this.subscriptionHandlers.clear();
+        for (const pending of this.pendingRequests.values()) pending.reject(new Error('Public WebSocket disconnected before responding.'));
+        this.pendingRequests.clear();
         this.notifyConnectionState(false);
         this.attemptReconnect();
       };
@@ -119,6 +117,12 @@ export class DerivWS {
    */
   send<T = Record<string, unknown>>(payload: Record<string, unknown>): Promise<T> {
     return new Promise((resolve, reject) => {
+      try {
+        this.assertPublicMarketDataRequest(payload, false);
+      } catch (error) {
+        reject(error);
+        return;
+      }
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error('WebSocket is not connected'));
         return;
@@ -145,6 +149,12 @@ export class DerivWS {
     handler: MessageHandler
   ): Promise<{ subscriptionId: string | null; unsubscribe: () => void }> {
     return new Promise((resolve, reject) => {
+      try {
+        this.assertPublicMarketDataRequest(payload, true);
+      } catch (error) {
+        reject(error);
+        return;
+      }
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error('WebSocket is not connected'));
         return;
@@ -237,7 +247,7 @@ export class DerivWS {
   }
 
   private extractSubscriptionId(data: Record<string, unknown>): string | null {
-    // Subscription ID can be in tick.id, subscription.id, or proposal.id
+    // Public tick subscriptions expose an ID in subscription.id or tick.id.
     if (data.subscription && typeof data.subscription === 'object') {
       return (data.subscription as Record<string, string>).id ?? null;
     }
@@ -259,6 +269,25 @@ export class DerivWS {
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
+    }
+  }
+
+  private assertPublicMarketDataRequest(payload: Record<string, unknown>, subscription: boolean): void {
+    const forbidden = ['authorize', 'proposal', 'buy', 'sell', 'transaction', 'proposal_open_contract', 'profit_table'];
+    if (forbidden.some((key) => key in payload)) {
+      throw new Error('Blocked non-public or trading Deriv request. This client is market-data-only.');
+    }
+    const primary = subscription
+      ? ['ticks']
+      : ['active_symbols', 'ticks_history', 'forget', 'ping'];
+    if (!primary.some((key) => key in payload)) {
+      throw new Error('Only active_symbols, ticks_history, ticks, forget, and ping are permitted.');
+    }
+    const allowed = new Set([
+      ...primary, 'end', 'start', 'count', 'style', 'adjust_start_time', 'subscribe',
+    ]);
+    for (const key of Object.keys(payload)) {
+      if (!allowed.has(key)) throw new Error(`Unsupported public market-data request field: ${key}`);
     }
   }
 

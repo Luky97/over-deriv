@@ -1,1 +1,1 @@
-export { getAuthBaseUrl, getApiBaseUrl, getPublicWsUrl } from './urls';
+export { getPublicWsUrl } from './urls';

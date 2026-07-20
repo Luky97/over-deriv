@@ -1,226 +1,77 @@
-import {
-  HIGH_DIGITS,
-  LOW_DIGITS,
-  TRACKED_DIGITS,
-} from './types';
-import type {
-  ConsensusResult,
-  DigitMovement,
-  DigitSnapshot,
-  DigitStats,
-  GroupMovement,
-  GroupSnapshot,
-  MovementStatus,
-  RankGroup,
-  TrackedDigit,
-} from './types';
+import type { DigitRankings, RankGroup } from './types';
 
 export const DIGIT_WINDOW_SIZE = 1_000;
 
-/** Convert a market pip value such as 0.01 into its fixed decimal precision. */
-export function pipSizeFromPip(pip: number): number {
-  if (!Number.isFinite(pip) || pip <= 0 || pip >= 1) return 0;
-  return Math.max(0, Math.round(-Math.log10(pip)));
+/** Convert either a pip value (0.001) or a precision value (3) to decimals. */
+export function pipSizeFromPip(pip: number | undefined): number {
+  if (!Number.isFinite(pip)) return 0;
+  const value = pip as number;
+  if (Number.isInteger(value) && value >= 1 && value <= 20) return value;
+  if (value > 0 && value < 1) return Math.max(0, Math.round(-Math.log10(value)));
+  return 0;
 }
 
-/**
- * Extract a quote's final displayed digit using fixed market precision.
- * Formatting first is essential because JavaScript drops trailing zeroes.
- */
-export function getLastDigit(price: number, pipSize: number): number {
-  if (!Number.isFinite(price)) return 0;
-  const safePipSize = Number.isInteger(pipSize)
-    ? Math.min(Math.max(pipSize, 0), 20)
-    : 0;
-  const formattedPrice = price.toFixed(safePipSize);
-  const finalCharacter = formattedPrice[formattedPrice.length - 1];
-  const digit = finalCharacter ? Number.parseInt(finalCharacter, 10) : 0;
-  return Number.isInteger(digit) ? digit : 0;
+/** Extract the final displayed digit without losing trailing zeroes. */
+export function getLastDigit(quote: number, pipSize: number): number {
+  if (!Number.isFinite(quote)) throw new Error('Quote must be finite.');
+  const precision = Number.isInteger(pipSize) ? Math.min(20, Math.max(0, pipSize)) : 0;
+  const display = quote.toFixed(precision);
+  const digit = Number.parseInt(display.at(-1) ?? '', 10);
+  if (!Number.isInteger(digit)) throw new Error('Unable to extract the displayed digit.');
+  return digit;
 }
 
-/** Count all digits 0-9. Tracked cards are filtered separately. */
-export function computeDigitStats(prices: readonly number[], pipSize: number): DigitStats {
+export function countDigits(digits: readonly number[]): number[] {
   const counts = Array<number>(10).fill(0);
-
-  for (const price of prices) {
-    if (!Number.isFinite(price)) continue;
-    counts[getLastDigit(price, pipSize)] += 1;
+  for (const digit of digits) {
+    if (Number.isInteger(digit) && digit >= 0 && digit <= 9) counts[digit] += 1;
   }
-
-  const totalTicks = prices.length;
-  const percentages = counts.map((count) =>
-    totalTicks === 0 ? 0 : (count / totalTicks) * 100
-  );
-
-  return { counts, percentages, totalTicks };
+  return counts;
 }
 
-/** Return a new rolling array capped to the latest windowSize values. */
-export function updateDigitStats(
-  prices: readonly number[],
-  newPrice: number,
-  windowSize: number
-): number[] {
-  return [...prices, newPrice].slice(-windowSize);
+function group(digits: number[], count: number, total: number): RankGroup {
+  return {
+    digits: digits.sort((a, b) => a - b),
+    count,
+    percentage: total === 0 ? 0 : (count / total) * 100,
+  };
 }
 
-/** Build the four all-digit rankings with mathematically correct ties. */
-export function computeRankings(
-  counts: readonly number[],
-  totalTicks: number
-): RankGroup[] {
-  const digitsByCount = new Map<number, TrackedDigit[]>();
-
-  for (const digit of TRACKED_DIGITS) {
+/** Rank by distinct frequency bands. Every tied digit remains in its band. */
+export function calculateRankings(counts: readonly number[], total: number): DigitRankings {
+  const bands = new Map<number, number[]>();
+  for (let digit = 0; digit <= 9; digit += 1) {
     const count = counts[digit] ?? 0;
-    const tiedDigits = digitsByCount.get(count) ?? [];
-    tiedDigits.push(digit);
-    digitsByCount.set(count, tiedDigits);
+    bands.set(count, [...(bands.get(count) ?? []), digit]);
   }
-
-  const distinctCounts = [...digitsByCount.keys()].sort((a, b) => b - a);
-  const percentage = (count: number) =>
-    totalTicks === 0 ? 0 : (count / totalTicks) * 100;
-
-  const makeRank = (label: string, count?: number): RankGroup => {
-    if (count === undefined) {
-      return { label, digits: [], count: 0, percentage: 0 };
-    }
-
-    return {
-      label,
-      digits: [...(digitsByCount.get(count) ?? [])].sort((a, b) => a - b),
-      count,
-      percentage: percentage(count),
-    };
-  };
-
-  const lowestIndex = distinctCounts.length - 1;
-  return [
-    makeRank('Most', distinctCounts[0]),
-    makeRank('2nd Most', distinctCounts[1]),
-    makeRank('Least', distinctCounts[lowestIndex]),
-    makeRank(
-      '2nd Least',
-      distinctCounts.length > 1 ? distinctCounts[lowestIndex - 1] : undefined
-    ),
-  ];
-}
-
-export function computeGroupSnapshot(
-  counts: readonly number[],
-  groupDigits: readonly TrackedDigit[],
-  totalTicks: number
-): GroupSnapshot {
-  const groupCount = groupDigits.reduce<number>(
-    (sum, digit) => sum + (counts[digit] ?? 0),
-    0
-  );
-
-  return {
-    groupCount,
-    groupPercentage: totalTicks === 0 ? 0 : (groupCount / totalTicks) * 100,
-  };
-}
-
-export function getMovementStatus(deltaCount: number): MovementStatus {
-  if (deltaCount > 0) return 'increase';
-  if (deltaCount < 0) return 'decrease';
-  return 'no-change';
-}
-
-export function createSnapshot(
-  counts: readonly number[],
-  totalTicks: number,
-  timestamp = Date.now()
-): DigitSnapshot {
-  const percentages = counts.map((count) =>
-    totalTicks === 0 ? 0 : (count / totalTicks) * 100
-  );
-
-  return {
-    counts: [...counts],
-    percentages,
-    totalTicks,
-    lowGroup: computeGroupSnapshot(counts, LOW_DIGITS, totalTicks),
-    highGroup: computeGroupSnapshot(counts, HIGH_DIGITS, totalTicks),
-    timestamp,
-  };
-}
-
-export function computeDigitMovements(
-  currentSnapshot: DigitSnapshot,
-  previousSnapshot: DigitSnapshot
-): DigitMovement[] {
-  return TRACKED_DIGITS.map((digit) => {
-    const currentCount = currentSnapshot.counts[digit] ?? 0;
-    const currentPercentage = currentSnapshot.percentages[digit] ?? 0;
-    const deltaCount = currentCount - (previousSnapshot.counts[digit] ?? 0);
-    const deltaPercentagePoints =
-      currentPercentage - (previousSnapshot.percentages[digit] ?? 0);
-
-    return {
-      digit,
-      currentCount,
-      currentPercentage,
-      deltaCount,
-      deltaPercentagePoints,
-      status: getMovementStatus(deltaCount),
-    };
+  const descending = [...bands.keys()].sort((a, b) => b - a);
+  const ascending = [...descending].reverse();
+  const mostCount = descending[0] ?? 0;
+  const secondMostCount = descending[1];
+  const leastCount = ascending[0] ?? 0;
+  const secondLeastCount = ascending[1];
+  const rankByDigit = Array<number>(10).fill(0);
+  descending.forEach((count, rank) => {
+    for (const digit of bands.get(count) ?? []) rankByDigit[digit] = rank + 1;
   });
-}
-
-export function computeGroupConsensus(
-  movements: readonly DigitMovement[],
-  groupDigits: readonly TrackedDigit[],
-  groupName: 'low' | 'high'
-): ConsensusResult {
-  const groupMovements = movements.filter((movement) =>
-    groupDigits.includes(movement.digit)
-  );
-  const increasing = groupMovements
-    .filter((movement) => movement.status === 'increase')
-    .map((movement) => movement.digit);
-  const decreasing = groupMovements
-    .filter((movement) => movement.status === 'decrease')
-    .map((movement) => movement.digit);
-  const noChange = groupMovements
-    .filter((movement) => movement.status === 'no-change')
-    .map((movement) => movement.digit);
-
-  let label = `Mixed ${groupName} movement`;
-  if (increasing.length === groupDigits.length) {
-    label = `All ${groupName} digits increased`;
-  } else if (decreasing.length === groupDigits.length) {
-    label = `All ${groupName} digits decreased`;
-  }
-
-  return { label, increasing, decreasing, noChange };
-}
-
-export function computeGroupMovement(
-  currentSnapshot: DigitSnapshot,
-  previousSnapshot: DigitSnapshot,
-  groupDigits: readonly TrackedDigit[],
-  groupName: 'low' | 'high',
-  movements: readonly DigitMovement[]
-): GroupMovement {
-  const current = groupName === 'low'
-    ? currentSnapshot.lowGroup
-    : currentSnapshot.highGroup;
-  const previous = groupName === 'low'
-    ? previousSnapshot.lowGroup
-    : previousSnapshot.highGroup;
-  const deltaCount = current.groupCount - previous.groupCount;
-
+  const maxPercentage = total === 0 ? 0 : (mostCount / total) * 100;
+  const minPercentage = total === 0 ? 0 : (leastCount / total) * 100;
   return {
-    digits: groupDigits,
-    currentCount: current.groupCount,
-    currentPercentage: current.groupPercentage,
-    deltaCount,
-    deltaPercentagePoints:
-      current.groupPercentage - previous.groupPercentage,
-    status: getMovementStatus(deltaCount),
-    consensus: computeGroupConsensus(movements, groupDigits, groupName),
+    most: group([...(bands.get(mostCount) ?? [])], mostCount, total),
+    secondMost: secondMostCount === undefined
+      ? group([], 0, total)
+      : group([...(bands.get(secondMostCount) ?? [])], secondMostCount, total),
+    least: group([...(bands.get(leastCount) ?? [])], leastCount, total),
+    secondLeast: secondLeastCount === undefined
+      ? group([], 0, total)
+      : group([...(bands.get(secondLeastCount) ?? [])], secondLeastCount, total),
+    rankByDigit,
+    concentration: maxPercentage / 100,
+    spreadPercentagePoints: maxPercentage - minPercentage,
   };
+}
+
+/** Compatibility helper retained for focused consumers and tests. */
+export function updateDigitStats(values: readonly number[], next: number, limit = DIGIT_WINDOW_SIZE): number[] {
+  return [...values, next].slice(-limit);
 }
