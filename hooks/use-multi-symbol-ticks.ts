@@ -184,12 +184,19 @@ export function useMultiSymbolTicks(
     void ws.send<{ active_symbols?: ActiveSymbol[] }>({ active_symbols: 'full' })
       .then((response) => {
         if (disposed) return;
-        const available = response.active_symbols ?? [];
+        let available = response.active_symbols ?? [];
+        // Filter out 1s markets
+        available = available.filter(symbol => 
+          !symbol.underlying_symbol.startsWith('1HZ') && 
+          !(symbol as any).display_name?.includes('(1s)') &&
+          !symbol.underlying_symbol.includes('1S')
+        );
+
         if (available.length === 0) throw new Error('Deriv returned no active symbols.');
         setSymbols(available);
         const availableIds = new Set(available.map((item) => item.underlying_symbol));
         const requested = readRequestedSymbols().filter((id) => availableIds.has(id));
-        const defaults = DEFAULT_SYMBOLS.filter((id) => availableIds.has(id)).slice(0, 4);
+        const defaults = DEFAULT_SYMBOLS.filter((id) => availableIds.has(id)).slice(0, 5); // Allow 5 defaults
         const initial = requested.length > 0 ? requested : defaults.length > 0 ? defaults : [available[0].underlying_symbol];
         const isInitialSelection = !selectionInitializedRef.current;
         selectionInitializedRef.current = true;

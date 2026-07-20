@@ -19,6 +19,9 @@ export type { OpenPosition } from '@/hooks/use-open-positions';
 export type { ClosedPosition } from '@/hooks/use-closed-positions';
 export type { PositionFilter } from '@/components/custom/positions-table';
 
+// ML and Engine types
+export * from './ml-types';
+
 // Digit-specific types
 
 export type ContractMode =
