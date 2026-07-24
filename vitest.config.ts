@@ -1,7 +1,16 @@
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
-  resolve: { alias: { '@': fileURLToPath(new URL('.', import.meta.url)) } },
-  test: { environment: 'node', restoreMocks: true },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['tests/**/*.test.{ts,tsx}'],
+    exclude: ['node_modules', '.next', 'out'],
+  },
 });
